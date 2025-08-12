@@ -1,7 +1,37 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
 import './App.css';
+
+// Helper function to create a circular texture
+const createCircleTexture = () => {
+  const canvas = document.createElement('canvas');
+  canvas.width = 32;
+  canvas.height = 32;
+  const context = canvas.getContext('2d');
+  if (context) {
+    context.beginPath();
+    context.arc(16, 16, 16, 0, 2 * Math.PI);
+    context.fillStyle = 'white';
+    context.fill();
+  }
+  return new THREE.CanvasTexture(canvas);
+};
+
+const createRingTexture = () => {
+  const canvas = document.createElement('canvas');
+  canvas.width = 64;
+  canvas.height = 64;
+  const context = canvas.getContext('2d');
+  if (context) {
+    context.beginPath();
+    context.arc(32, 32, 28, 0, 2 * Math.PI);
+    context.lineWidth = 4;
+    context.strokeStyle = 'white';
+    context.stroke();
+  }
+  return new THREE.CanvasTexture(canvas);
+};
 
 interface SolarSystem {
   id: number;
@@ -27,137 +57,339 @@ interface Stargate {
 interface MapData {
   solar_systems: { [key: string]: SolarSystem };
   stargates: { [key: string]: Stargate };
-  regions: { [key: string]: any }; // Define more precisely if needed
-  constellations: { [key: string]: any }; // Define more precisely if needed
+  regions: { [key: string]: any };
+  constellations: { [key: string]: any };
 }
 
 function App() {
   const mountRef = useRef<HTMLDivElement>(null);
   const [mapData, setMapData] = useState<MapData | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [highlightedSystem, setHighlightedSystem] = useState<SolarSystem | null>(null);
+  const [hoveredSystem, setHoveredSystem] = useState<SolarSystem | null>(null);
+  const [axisConfig, setAxisConfig] = useState({
+    x: { source: 'x' as 'x' | 'y' | 'z', sign: 1 as 1 | -1 },
+    y: { source: 'z' as 'x' | 'y' | 'z', sign: 1 as 1 | -1 },
+    z: { source: 'y' as 'x' | 'y' | 'z', sign: -1 as 1 | -1 },
+  });
 
+  // Refs for three.js objects
+  const sceneRef = useRef<THREE.Scene>();
+  const cameraRef = useRef<THREE.PerspectiveCamera>();
+  const rendererRef = useRef<THREE.WebGLRenderer>();
+  const controlsRef = useRef<OrbitControls>();
+  const starFieldRef = useRef<THREE.Points>();
+  const hoverPointRef = useRef<THREE.Points>();
+  const visibleSystemsRef = useRef<SolarSystem[]>([]);
+  const animationRef = useRef({
+    isAnimating: false,
+    startTime: 0,
+    startPos: new THREE.Vector3(),
+    endPos: new THREE.Vector3(),
+    startTarget: new THREE.Vector3(),
+    endTarget: new THREE.Vector3(),
+    duration: 500, // ms
+  });
+  const prevHighlightedSystemRef = useRef<SolarSystem | null>(null);
+
+  const circleTexture = useMemo(() => createCircleTexture(), []);
+  const ringTexture = useMemo(() => createRingTexture(), []);
+
+  const pointsMaterial = useMemo(() => new THREE.PointsMaterial({
+    size: 2,
+    sizeAttenuation: true,
+    map: circleTexture,
+    transparent: true,
+    alphaTest: 0.5,
+    vertexColors: true,
+  }), [circleTexture]);
+
+  // Fetch data
   useEffect(() => {
-    // Fetch map data
     fetch('/map_data.json')
       .then((response) => response.json())
-      .then((data: MapData) => {
-        setMapData(data);
-        console.log('Map data loaded:', data); // Log loaded data
-      })
+      .then((data: MapData) => setMapData(data))
       .catch((error) => console.error('Error loading map data:', error));
   }, []);
 
+  const getTransformedPosition = useCallback((position: { x: number; y: number; z: number }) => {
+    return {
+      x: position[axisConfig.x.source] * axisConfig.x.sign,
+      y: position[axisConfig.y.source] * axisConfig.y.sign,
+      z: position[axisConfig.z.source] * axisConfig.z.sign,
+    };
+  }, [axisConfig]);
+
+  // Initialize Scene
   useEffect(() => {
-    if (!mapData || !mountRef.current) return;
+    const currentMount = mountRef.current;
+    if (!currentMount) return;
 
-    console.log('Rendering map with data:', mapData); // Log when rendering starts
+    sceneRef.current = new THREE.Scene();
+    cameraRef.current = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 10000000);
+    rendererRef.current = new THREE.WebGLRenderer({ antialias: true });
+    rendererRef.current.setSize(window.innerWidth, window.innerHeight);
+    currentMount.appendChild(rendererRef.current.domElement);
 
-    // Scene setup
-    const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(
-      75,
-      window.innerWidth / window.innerHeight,
-      0.1,
-      100000
-    );
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    mountRef.current.appendChild(renderer.domElement);
+    controlsRef.current = new OrbitControls(cameraRef.current, rendererRef.current.domElement);
+    cameraRef.current.position.z = 5000;
 
-    // Controls
-    const controls = new OrbitControls(camera, renderer.domElement);
-    camera.position.z = 5000; // Initial camera position
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.2);
+    sceneRef.current.add(ambientLight);
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    directionalLight.position.set(0, 1, 0);
+    sceneRef.current.add(directionalLight);
 
-    // Add ambient light
-    const ambientLight = new THREE.AmbientLight(0x404040); // soft white light
-    scene.add(ambientLight);
+    // Hover Point
+    const hoverGeometry = new THREE.BufferGeometry();
+    hoverGeometry.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0], 3));
+    const hoverMaterial = new THREE.PointsMaterial({
+      size: 20, // Default/min size
+      sizeAttenuation: false, // Use screen-space sizing
+      map: ringTexture,
+      color: 0xff4c26,
+      transparent: true,
+      alphaTest: 0.5,
+    });
+    hoverPointRef.current = new THREE.Points(hoverGeometry, hoverMaterial);
+    hoverPointRef.current.visible = false;
+    sceneRef.current.add(hoverPointRef.current);
 
-    // Add directional light
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.5);
-    directionalLight.position.set(0, 1, 0); // from top
-    scene.add(directionalLight);
-
-    // Render Solar Systems
-    const systemGeometry = new THREE.SphereGeometry(50, 16, 16); // Small spheres for systems
-    const systemMaterial = new THREE.MeshBasicMaterial({ color: 0x00ff00 }); // Green systems
-
-    let systemCount = 0;
-    if (mapData.solar_systems) {
-      Object.values(mapData.solar_systems).forEach((system) => {
-        if (system && system.position && !system.hidden) {
-          const systemMesh = new THREE.Mesh(systemGeometry, systemMaterial);
-          systemMesh.position.set(
-            system.position.x,
-            system.position.y,
-            system.position.z
-          );
-          scene.add(systemMesh);
-          systemCount++;
+    const animate = () => {
+      requestAnimationFrame(animate);
+      const anim = animationRef.current;
+      if (anim.isAnimating) {
+        const now = Date.now();
+        const progress = Math.min((now - anim.startTime) / anim.duration, 1);
+        cameraRef.current?.position.lerpVectors(anim.startPos, anim.endPos, progress);
+        controlsRef.current?.target.lerpVectors(anim.startTarget, anim.endTarget, progress);
+        if (progress >= 1) {
+          anim.isAnimating = false;
         }
-      });
+      }
+      controlsRef.current?.update();
+      rendererRef.current?.render(sceneRef.current!, cameraRef.current!);
+    };
+    animate();
+
+    const handleResize = () => {
+      if (cameraRef.current && rendererRef.current) {
+        cameraRef.current.aspect = window.innerWidth / window.innerHeight;
+        cameraRef.current.updateProjectionMatrix();
+        rendererRef.current.setSize(window.innerWidth, window.innerHeight);
+      }
+    };
+    window.addEventListener('resize', handleResize);
+
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      controlsRef.current?.dispose();
+      rendererRef.current?.dispose();
+      currentMount.removeChild(rendererRef.current!.domElement);
+    };
+  }, [ringTexture]);
+
+  // Create and update starfield and stargates
+  useEffect(() => {
+    if (!mapData || !sceneRef.current) return;
+
+    if (starFieldRef.current) {
+      sceneRef.current.remove(starFieldRef.current);
+      starFieldRef.current.geometry.dispose();
     }
-    console.log('Rendered solar systems:', systemCount); // Log rendered systems
 
-    // Render Stargates (lines between connected systems)
-    const stargateMaterial = new THREE.LineBasicMaterial({ color: 0x0000ff }); // Blue lines
+    visibleSystemsRef.current = Object.values(mapData.solar_systems).filter(s => s && s.position && !s.hidden);
 
-    let stargateCount = 0;
+    const vertices = [];
+    const colors = [];
+    const white = new THREE.Color(0xffffff);
+
+    for (const system of visibleSystemsRef.current) {
+      const pos = getTransformedPosition(system.position);
+      vertices.push(pos.x, pos.y, pos.z);
+      colors.push(white.r, white.g, white.b);
+    }
+
+    const pointsGeometry = new THREE.BufferGeometry();
+    pointsGeometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+    pointsGeometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+
+    starFieldRef.current = new THREE.Points(pointsGeometry, pointsMaterial);
+    sceneRef.current.add(starFieldRef.current);
+
+    const stargateMaterial = new THREE.LineBasicMaterial({ color: 0xcccccc, transparent: true, opacity: 0.1 });
     if (mapData.stargates) {
       Object.values(mapData.stargates).forEach((stargate) => {
         const sourceSystem = mapData.solar_systems[stargate.source_system_id];
         const destinationSystem = mapData.solar_systems[stargate.destination_system_id];
-
-        if (
-          sourceSystem &&
-          destinationSystem &&
-          !sourceSystem.hidden &&
-          !destinationSystem.hidden &&
-          sourceSystem.position &&
-          destinationSystem.position
-        ) {
-          const points = [];
-          points.push(new THREE.Vector3(sourceSystem.position.x, sourceSystem.position.y, sourceSystem.position.z));
-          points.push(new THREE.Vector3(destinationSystem.position.x, destinationSystem.position.y, destinationSystem.position.z));
-
+        if (sourceSystem && destinationSystem && sourceSystem.position && destinationSystem.position && !sourceSystem.hidden && !destinationSystem.hidden) {
+          const sourcePos = getTransformedPosition(sourceSystem.position);
+          const destPos = getTransformedPosition(destinationSystem.position);
+          const points = [new THREE.Vector3(sourcePos.x, sourcePos.y, sourcePos.z), new THREE.Vector3(destPos.x, destPos.y, destPos.z)];
           const geometry = new THREE.BufferGeometry().setFromPoints(points);
           const line = new THREE.Line(geometry, stargateMaterial);
-          scene.add(line);
-          stargateCount++;
+          sceneRef.current?.add(line);
         }
       });
     }
-    console.log('Rendered stargates:', stargateCount); // Log rendered stargates
+  }, [mapData, axisConfig, getTransformedPosition, pointsMaterial]);
 
-    // Animation loop
-    const animate = () => {
-      requestAnimationFrame(animate);
-      controls.update(); // Only required if controls.enableDamping or controls.autoRotate are set to true
-      renderer.render(scene, camera);
-    };
-    animate();
+  // Handle highlighting
+  useEffect(() => {
+    if (!starFieldRef.current) return;
+    const colors = starFieldRef.current.geometry.attributes.color as THREE.BufferAttribute;
+    const white = new THREE.Color(0xffffff);
+    const red = new THREE.Color(0xff4c26);
 
-    // Handle window resize
-    const handleResize = () => {
-      camera.aspect = window.innerWidth / window.innerHeight;
-      camera.updateProjectionMatrix();
-      renderer.setSize(window.innerWidth, window.innerHeight);
-    };
-    window.addEventListener('resize', handleResize);
-
-    // Cleanup
-    return () => {
-      if (mountRef.current) {
-        mountRef.current.removeChild(renderer.domElement);
+    if (prevHighlightedSystemRef.current) {
+      const prevIndex = visibleSystemsRef.current.findIndex(s => s.id === prevHighlightedSystemRef.current!.id);
+      if (prevIndex !== -1) {
+        white.toArray(colors.array, prevIndex * 3);
       }
-      window.removeEventListener('resize', handleResize);
-      controls.dispose();
-      renderer.dispose();
-      systemGeometry.dispose();
-      systemMaterial.dispose();
-      stargateMaterial.dispose();
-    };
-  }, [mapData]); // Re-run effect when mapData changes
+    }
 
-  return <div ref={mountRef} style={{ width: '100vw', height: '100vh' }} />;
+    if (highlightedSystem) {
+      const highlightedIndex = visibleSystemsRef.current.findIndex(s => s.id === highlightedSystem.id);
+      if (highlightedIndex !== -1) {
+        red.toArray(colors.array, highlightedIndex * 3);
+      }
+    }
+    colors.needsUpdate = true;
+    prevHighlightedSystemRef.current = highlightedSystem;
+  }, [highlightedSystem]);
+
+  // Handle camera animation
+  useEffect(() => {
+    if (!highlightedSystem || !controlsRef.current || !cameraRef.current) return;
+
+    const anim = animationRef.current;
+    if (!anim.isAnimating) {
+      anim.isAnimating = true;
+      anim.startTime = Date.now();
+      anim.startPos.copy(cameraRef.current.position);
+      anim.startTarget.copy(controlsRef.current.target);
+
+      const newTarget = new THREE.Vector3();
+      const transformedPos = getTransformedPosition(highlightedSystem.position);
+      newTarget.set(transformedPos.x, transformedPos.y, transformedPos.z);
+      anim.endTarget.copy(newTarget);
+
+      const offset = new THREE.Vector3().subVectors(anim.startPos, anim.startTarget);
+      anim.endPos.copy(newTarget).add(offset);
+    }
+  }, [highlightedSystem, getTransformedPosition]);
+
+  // Handle Hover Effect
+  useEffect(() => {
+    const hoverPoint = hoverPointRef.current;
+    const camera = cameraRef.current;
+    const renderer = rendererRef.current;
+
+    if (hoverPoint && camera && renderer) {
+      if (hoveredSystem) {
+        const pos = getTransformedPosition(hoveredSystem.position);
+        hoverPoint.position.set(pos.x, pos.y, pos.z);
+
+        // Adaptive sizing
+        const worldPos = new THREE.Vector3(pos.x, pos.y, pos.z);
+        const distance = camera.position.distanceTo(worldPos);
+        const scale = renderer.domElement.height / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2));
+        const projectedStarSize = (pointsMaterial.size * scale) / distance;
+
+        const minRingSize = 15;
+        const ringPadding = 10;
+        const newRingSize = Math.max(minRingSize, projectedStarSize + ringPadding);
+        
+        (hoverPoint.material as THREE.PointsMaterial).size = newRingSize;
+
+        hoverPoint.visible = true;
+      } else {
+        hoverPoint.visible = false;
+      }
+    }
+  }, [hoveredSystem, getTransformedPosition, pointsMaterial]);
+
+  // Handle Pointer Events
+  useEffect(() => {
+    const currentRenderer = rendererRef.current;
+    if (!currentRenderer) return;
+
+    const raycaster = new THREE.Raycaster();
+    const mouse = new THREE.Vector2();
+
+    const onPointerMove = (event: PointerEvent) => {
+      mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+      mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+      if (cameraRef.current && starFieldRef.current) {
+        raycaster.setFromCamera(mouse, cameraRef.current);
+        raycaster.params.Points.threshold = 5;
+        const intersects = raycaster.intersectObject(starFieldRef.current);
+        if (intersects.length > 0 && intersects[0].index !== undefined) {
+          setHoveredSystem(visibleSystemsRef.current[intersects[0].index]);
+        } else {
+          setHoveredSystem(null);
+        }
+      }
+    };
+
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.button !== 0) return;
+      if (hoveredSystem) {
+        setHighlightedSystem(hoveredSystem);
+      }
+    };
+
+    currentRenderer.domElement.addEventListener('pointermove', onPointerMove);
+    currentRenderer.domElement.addEventListener('pointerdown', onPointerDown);
+
+    return () => {
+      currentRenderer.domElement.removeEventListener('pointermove', onPointerMove);
+      currentRenderer.domElement.removeEventListener('pointerdown', onPointerDown);
+    };
+  }, [hoveredSystem]);
+
+  const handleSearch = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter' && mapData) {
+      const query = searchQuery.toLowerCase();
+      const foundSystem = Object.values(mapData.solar_systems).find(
+        (system) => system.name.toLowerCase() === query
+      );
+      if (foundSystem) {
+        setHighlightedSystem(foundSystem);
+      } else {
+        setHighlightedSystem(null);
+        alert('System not found');
+      }
+    }
+  };
+
+  return (
+    <>
+      <div style={{ position: 'absolute', top: 10, left: 10, zIndex: 1 }}>
+        <input
+          type="text"
+          placeholder="Search for a system..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          onKeyDown={handleSearch}
+          style={{ padding: '5px' }}
+        />
+      </div>
+      <div style={{ position: 'absolute', top: 40, left: 10, zIndex: 1, color: 'white', background: 'rgba(0,0,0,0.5)', padding: '5px', borderRadius: '5px' }}>
+        <span>Axis Controls:</span>
+        <button onClick={() => setAxisConfig(c => ({ ...c, x: { ...c.x, sign: c.x.sign * -1 as 1 | -1 } }))} style={{ marginLeft: '5px' }}>
+          Flip X
+        </button>
+        <button onClick={() => setAxisConfig(c => ({ ...c, y: { ...c.y, sign: c.y.sign * -1 as 1 | -1 } }))} style={{ marginLeft: '5px' }}>
+          Flip Y
+        </button>
+        <button onClick={() => setAxisConfig(c => ({ ...c, z: { ...c.z, sign: c.z.sign * -1 as 1 | -1 } }))} style={{ marginLeft: '5px' }}>
+          Flip Z
+        </button>
+      </div>
+      <div ref={mountRef} style={{ width: '100vw', height: '100vh' }} />
+    </>
+  );
 }
 
 export default App;

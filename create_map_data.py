@@ -43,7 +43,7 @@ def create_map_data():
     stargates = {}
     stargate_id_counter = 0
     solar_systems_transformed = {}
-    scale_factor = 1_000_000_000_000_000 # Scale down astronomical coordinates
+    scale_factor = 9_460_730_472_580_800 # 1 light-year in meters
 
     if stellar_systems:
         for system_id, system_data in stellar_systems.items():
