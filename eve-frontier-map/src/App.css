@@ -1,0 +1,9 @@
+body {
+  margin: 0;
+  overflow: hidden; /* Hide scrollbars */
+}
+
+#root {
+  width: 100vw;
+  height: 100vh;
+}
