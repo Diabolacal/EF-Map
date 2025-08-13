@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
+import CameraControls from 'camera-controls';
 import './App.css';
+
+CameraControls.install({ THREE });
 
 // Helper function to create a circular texture
 const createCircleTexture = () => {
@@ -67,29 +69,15 @@ function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [highlightedSystem, setHighlightedSystem] = useState<SolarSystem | null>(null);
   const [hoveredSystem, setHoveredSystem] = useState<SolarSystem | null>(null);
-  const [axisConfig, setAxisConfig] = useState({
-    x: { source: 'x' as 'x' | 'y' | 'z', sign: 1 as 1 | -1 },
-    y: { source: 'z' as 'x' | 'y' | 'z', sign: 1 as 1 | -1 },
-    z: { source: 'y' as 'x' | 'y' | 'z', sign: -1 as 1 | -1 },
-  });
 
   // Refs for three.js objects
-  const sceneRef = useRef<THREE.Scene>();
-  const cameraRef = useRef<THREE.PerspectiveCamera>();
-  const rendererRef = useRef<THREE.WebGLRenderer>();
-  const controlsRef = useRef<OrbitControls>();
-  const starFieldRef = useRef<THREE.Points>();
-  const hoverPointRef = useRef<THREE.Points>();
+  const sceneRef = useRef<THREE.Scene | null>(null);
+  const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
+  const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
+  const controlsRef = useRef<CameraControls | null>(null);
+  const starFieldRef = useRef<THREE.Points | null>(null);
+  const hoverPointRef = useRef<THREE.Points | null>(null);
   const visibleSystemsRef = useRef<SolarSystem[]>([]);
-  const animationRef = useRef({
-    isAnimating: false,
-    startTime: 0,
-    startPos: new THREE.Vector3(),
-    endPos: new THREE.Vector3(),
-    startTarget: new THREE.Vector3(),
-    endTarget: new THREE.Vector3(),
-    duration: 500, // ms
-  });
   const prevHighlightedSystemRef = useRef<SolarSystem | null>(null);
 
   const circleTexture = useMemo(() => createCircleTexture(), []);
@@ -114,11 +102,11 @@ function App() {
 
   const getTransformedPosition = useCallback((position: { x: number; y: number; z: number }) => {
     return {
-      x: position[axisConfig.x.source] * axisConfig.x.sign,
-      y: position[axisConfig.y.source] * axisConfig.y.sign,
-      z: position[axisConfig.z.source] * axisConfig.z.sign,
+      x: position.x,
+      y: position.z,
+      z: position.y * -1,
     };
-  }, [axisConfig]);
+  }, []);
 
   // Initialize Scene
   useEffect(() => {
@@ -126,13 +114,26 @@ function App() {
     if (!currentMount) return;
 
     sceneRef.current = new THREE.Scene();
-    cameraRef.current = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 10000000);
-    rendererRef.current = new THREE.WebGLRenderer({ antialias: true });
-    rendererRef.current.setSize(window.innerWidth, window.innerHeight);
-    currentMount.appendChild(rendererRef.current.domElement);
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 10000000);
+    cameraRef.current = camera;
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    rendererRef.current = renderer;
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    currentMount.appendChild(renderer.domElement);
 
-    controlsRef.current = new OrbitControls(cameraRef.current, rendererRef.current.domElement);
-    cameraRef.current.position.z = 5000;
+    camera.up.set(0, 1, 0);
+    camera.position.set(0, 0, 5000);
+
+    const controls = new CameraControls(camera, renderer.domElement);
+    controls.mouseButtons.left = CameraControls.ACTION.ROTATE;
+    controls.mouseButtons.right = CameraControls.ACTION.TRUCK;
+    controls.mouseButtons.middle = CameraControls.ACTION.DOLLY;
+    controls.minPolarAngle = 0.01;
+    controls.maxPolarAngle = Math.PI - 0.01;
+    controls.dollyToCursor = true;
+    controls.dampingFactor = 0.12;
+    controls.draggingDampingFactor = 0.15;
+    controlsRef.current = controls;
 
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.2);
     sceneRef.current.add(ambientLight);
@@ -144,8 +145,8 @@ function App() {
     const hoverGeometry = new THREE.BufferGeometry();
     hoverGeometry.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0], 3));
     const hoverMaterial = new THREE.PointsMaterial({
-      size: 20, // Default/min size
-      sizeAttenuation: false, // Use screen-space sizing
+      size: 20,
+      sizeAttenuation: false,
       map: ringTexture,
       color: 0xff4c26,
       transparent: true,
@@ -155,20 +156,14 @@ function App() {
     hoverPointRef.current.visible = false;
     sceneRef.current.add(hoverPointRef.current);
 
+    const clock = new THREE.Clock();
     const animate = () => {
       requestAnimationFrame(animate);
-      const anim = animationRef.current;
-      if (anim.isAnimating) {
-        const now = Date.now();
-        const progress = Math.min((now - anim.startTime) / anim.duration, 1);
-        cameraRef.current?.position.lerpVectors(anim.startPos, anim.endPos, progress);
-        controlsRef.current?.target.lerpVectors(anim.startTarget, anim.endTarget, progress);
-        if (progress >= 1) {
-          anim.isAnimating = false;
-        }
+      const delta = clock.getDelta();
+      controls.update(delta);
+      if (sceneRef.current && cameraRef.current) {
+        renderer.render(sceneRef.current, cameraRef.current);
       }
-      controlsRef.current?.update();
-      rendererRef.current?.render(sceneRef.current!, cameraRef.current!);
     };
     animate();
 
@@ -183,9 +178,9 @@ function App() {
 
     return () => {
       window.removeEventListener('resize', handleResize);
-      controlsRef.current?.dispose();
-      rendererRef.current?.dispose();
-      currentMount.removeChild(rendererRef.current!.domElement);
+      controls.dispose();
+      renderer.dispose();
+      currentMount.removeChild(renderer.domElement);
     };
   }, [ringTexture]);
 
@@ -232,7 +227,7 @@ function App() {
         }
       });
     }
-  }, [mapData, axisConfig, getTransformedPosition, pointsMaterial]);
+  }, [mapData, getTransformedPosition, pointsMaterial]);
 
   // Handle highlighting
   useEffect(() => {
@@ -260,23 +255,13 @@ function App() {
 
   // Handle camera animation
   useEffect(() => {
-    if (!highlightedSystem || !controlsRef.current || !cameraRef.current) return;
+    if (!highlightedSystem || !controlsRef.current) return;
 
-    const anim = animationRef.current;
-    if (!anim.isAnimating) {
-      anim.isAnimating = true;
-      anim.startTime = Date.now();
-      anim.startPos.copy(cameraRef.current.position);
-      anim.startTarget.copy(controlsRef.current.target);
+    const newTarget = new THREE.Vector3();
+    const transformedPos = getTransformedPosition(highlightedSystem.position);
+    newTarget.set(transformedPos.x, transformedPos.y, transformedPos.z);
 
-      const newTarget = new THREE.Vector3();
-      const transformedPos = getTransformedPosition(highlightedSystem.position);
-      newTarget.set(transformedPos.x, transformedPos.y, transformedPos.z);
-      anim.endTarget.copy(newTarget);
-
-      const offset = new THREE.Vector3().subVectors(anim.startPos, anim.startTarget);
-      anim.endPos.copy(newTarget).add(offset);
-    }
+    controlsRef.current.setTarget(newTarget.x, newTarget.y, newTarget.z, true);
   }, [highlightedSystem, getTransformedPosition]);
 
   // Handle Hover Effect
@@ -374,18 +359,6 @@ function App() {
           onKeyDown={handleSearch}
           style={{ padding: '5px' }}
         />
-      </div>
-      <div style={{ position: 'absolute', top: 40, left: 10, zIndex: 1, color: 'white', background: 'rgba(0,0,0,0.5)', padding: '5px', borderRadius: '5px' }}>
-        <span>Axis Controls:</span>
-        <button onClick={() => setAxisConfig(c => ({ ...c, x: { ...c.x, sign: c.x.sign * -1 as 1 | -1 } }))} style={{ marginLeft: '5px' }}>
-          Flip X
-        </button>
-        <button onClick={() => setAxisConfig(c => ({ ...c, y: { ...c.y, sign: c.y.sign * -1 as 1 | -1 } }))} style={{ marginLeft: '5px' }}>
-          Flip Y
-        </button>
-        <button onClick={() => setAxisConfig(c => ({ ...c, z: { ...c.z, sign: c.z.sign * -1 as 1 | -1 } }))} style={{ marginLeft: '5px' }}>
-          Flip Z
-        </button>
       </div>
       <div ref={mountRef} style={{ width: '100vw', height: '100vh' }} />
     </>
