@@ -1,9 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
-import CameraControls from 'camera-controls';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import './App.css';
-
-CameraControls.install({ THREE });
 
 // Helper function to create a circular texture
 const createCircleTexture = () => {
@@ -74,10 +72,19 @@ function App() {
   const sceneRef = useRef<THREE.Scene | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
-  const controlsRef = useRef<CameraControls | null>(null);
+  const controlsRef = useRef<OrbitControls | null>(null);
   const starFieldRef = useRef<THREE.Points | null>(null);
   const hoverPointRef = useRef<THREE.Points | null>(null);
   const visibleSystemsRef = useRef<SolarSystem[]>([]);
+  const animationRef = useRef({
+    isAnimating: false,
+    startTime: 0,
+    startPos: new THREE.Vector3(),
+    endPos: new THREE.Vector3(),
+    startTarget: new THREE.Vector3(),
+    endTarget: new THREE.Vector3(),
+    duration: 500, // ms
+  });
   const prevHighlightedSystemRef = useRef<SolarSystem | null>(null);
 
   const circleTexture = useMemo(() => createCircleTexture(), []);
@@ -114,26 +121,17 @@ function App() {
     if (!currentMount) return;
 
     sceneRef.current = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 10000000);
-    cameraRef.current = camera;
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
-    rendererRef.current = renderer;
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    currentMount.appendChild(renderer.domElement);
+    cameraRef.current = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 10000000);
+    rendererRef.current = new THREE.WebGLRenderer({ antialias: true });
+    rendererRef.current.setSize(window.innerWidth, window.innerHeight);
+    currentMount.appendChild(rendererRef.current.domElement);
 
-    camera.up.set(0, 1, 0);
-    camera.position.set(0, 0, 5000);
-
-    const controls = new CameraControls(camera, renderer.domElement);
-    controls.mouseButtons.left = CameraControls.ACTION.ROTATE;
-    controls.mouseButtons.right = CameraControls.ACTION.TRUCK;
-    controls.mouseButtons.middle = CameraControls.ACTION.DOLLY;
-    controls.minPolarAngle = 0.01;
-    controls.maxPolarAngle = Math.PI - 0.01;
-    controls.dollyToCursor = true;
-    controls.dampingFactor = 0.12;
-    controls.draggingDampingFactor = 0.15;
+    const controls = new OrbitControls(cameraRef.current, rendererRef.current.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.1;
     controlsRef.current = controls;
+    
+    cameraRef.current.position.z = 5000;
 
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.2);
     sceneRef.current.add(ambientLight);
@@ -145,8 +143,8 @@ function App() {
     const hoverGeometry = new THREE.BufferGeometry();
     hoverGeometry.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0], 3));
     const hoverMaterial = new THREE.PointsMaterial({
-      size: 20,
-      sizeAttenuation: false,
+      size: 20, // Default/min size
+      sizeAttenuation: false, // Use screen-space sizing
       map: ringTexture,
       color: 0xff4c26,
       transparent: true,
@@ -156,14 +154,20 @@ function App() {
     hoverPointRef.current.visible = false;
     sceneRef.current.add(hoverPointRef.current);
 
-    const clock = new THREE.Clock();
     const animate = () => {
       requestAnimationFrame(animate);
-      const delta = clock.getDelta();
-      controls.update(delta);
-      if (sceneRef.current && cameraRef.current) {
-        renderer.render(sceneRef.current, cameraRef.current);
+      const anim = animationRef.current;
+      if (anim.isAnimating) {
+        const now = Date.now();
+        const progress = Math.min((now - anim.startTime) / anim.duration, 1);
+        cameraRef.current?.position.lerpVectors(anim.startPos, anim.endPos, progress);
+        controlsRef.current?.target.lerpVectors(anim.startTarget, anim.endTarget, progress);
+        if (progress >= 1) {
+          anim.isAnimating = false;
+        }
       }
+      controls.update();
+      rendererRef.current?.render(sceneRef.current!, cameraRef.current!);
     };
     animate();
 
@@ -179,8 +183,8 @@ function App() {
     return () => {
       window.removeEventListener('resize', handleResize);
       controls.dispose();
-      renderer.dispose();
-      currentMount.removeChild(renderer.domElement);
+      rendererRef.current?.dispose();
+      currentMount.removeChild(rendererRef.current!.domElement);
     };
   }, [ringTexture]);
 
@@ -255,13 +259,23 @@ function App() {
 
   // Handle camera animation
   useEffect(() => {
-    if (!highlightedSystem || !controlsRef.current) return;
+    if (!highlightedSystem || !controlsRef.current || !cameraRef.current) return;
 
-    const newTarget = new THREE.Vector3();
-    const transformedPos = getTransformedPosition(highlightedSystem.position);
-    newTarget.set(transformedPos.x, transformedPos.y, transformedPos.z);
+    const anim = animationRef.current;
+    if (!anim.isAnimating) {
+      anim.isAnimating = true;
+      anim.startTime = Date.now();
+      anim.startPos.copy(cameraRef.current.position);
+      anim.startTarget.copy(controlsRef.current.target);
 
-    controlsRef.current.setTarget(newTarget.x, newTarget.y, newTarget.z, true);
+      const newTarget = new THREE.Vector3();
+      const transformedPos = getTransformedPosition(highlightedSystem.position);
+      newTarget.set(transformedPos.x, transformedPos.y, transformedPos.z);
+      anim.endTarget.copy(newTarget);
+
+      const offset = new THREE.Vector3().subVectors(anim.startPos, anim.startTarget);
+      anim.endPos.copy(newTarget).add(offset);
+    }
   }, [highlightedSystem, getTransformedPosition]);
 
   // Handle Hover Effect
