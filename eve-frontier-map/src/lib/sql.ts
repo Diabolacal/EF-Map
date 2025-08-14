@@ -1,12 +1,10 @@
 import initSqlJs, { type Database, type SqlJsStatic } from "sql.js";
 import wasmUrl from "sql.js/dist/sql-wasm.wasm?url";
 
-let sqlPromise: Promise<SqlJsStatic> | null = null;
+let sqlPromise: Promise<SqlJsStatic> | undefined;
 
 export function getSql(): Promise<SqlJsStatic> {
-  if (!sqlPromise) {
-    sqlPromise = initSqlJs({ locateFile: () => wasmUrl });
-  }
+  sqlPromise ??= initSqlJs({ locateFile: () => wasmUrl });
   return sqlPromise;
 }
 
