@@ -3,7 +3,8 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import './App.css';
 import RegionHighlighterModule from './modules/RegionHighlighter';
-import initSqlJs from 'sql.js';
+import { openDbFromArrayBuffer } from "./lib/sql";
+import type { SystemRow, StargateRow, RegionRow, ConstellationRow } from "./types/db";
 
 // Helper function to create a circular texture
 const createCircleTexture = () => {
@@ -64,35 +65,7 @@ interface MapData {
 }
 
 // Add these interfaces
-type SystemRow = [
-  number, // id
-  string, // name
-  number, // constellation_id
-  number, // region_id
-  any, any, any, // placeholder for unused columns
-  number, // position.x
-  number, // position.y
-  number, // position.z
-  any, any, any, // placeholder for unused columns
-  boolean // hidden
-];
 
-type StargateRow = [
-  number, // id
-  string, // name
-  number, // source_system_id
-  number // destination_system_id
-];
-
-type RegionRow = [
-  number, // id
-  string // name
-];
-
-type ConstellationRow = [
-  number, // id
-  string // name
-];
 
 function App() {
   const mountRef = useRef<HTMLDivElement>(null);
@@ -167,12 +140,9 @@ function App() {
   useEffect(() => {
     const loadDatabase = async () => {
       try {
-        const SQL = await initSqlJs({
-          locateFile: (file: string) => `/${file}`
-        });
         const response = await fetch('/map_data.db');
         const dbBytes = await response.arrayBuffer();
-        const db = new SQL.Database(new Uint8Array(dbBytes));
+        const db = await openDbFromArrayBuffer(dbBytes);
 
         // Query the database
         const systemsRes = db.exec("SELECT * FROM systems WHERE hidden = 0");
@@ -182,40 +152,57 @@ function App() {
 
         const solar_systems: { [key: string]: SolarSystem } = {};
         if (systemsRes.length > 0) {
-            systemsRes[0].values.forEach((row) => {
-                const typedRow = row as SystemRow;
-                solar_systems[typedRow[0]] = {
-                    id: typedRow[0],
-                    name: typedRow[1],
-                    position: { x: typedRow[7], y: typedRow[8], z: typedRow[9] },
-                    region_id: typedRow[3],
-                    constellation_id: typedRow[2],
-                    planets: 0, // This data is not in the DB
-                    hidden: typedRow[13]
+            systemsRes[0].values.forEach((row: any[]) => {
+                const system: SystemRow = {
+                    id: row[0],
+                    name: row[1],
+                    constellation_id: row[2],
+                    region_id: row[3],
+                    x: row[7],
+                    y: row[8],
+                    z: row[9],
+                    hidden: row[13]
+                };
+                solar_systems[system.id] = {
+                    id: system.id,
+                    name: system.name,
+                    position: { x: system.x, y: system.y, z: system.z },
+                    region_id: system.region_id,
+                    constellation_id: system.constellation_id,
+                    planets: 0,
+                    hidden: system.hidden
                 };
             });
         }
 
         const stargates: { [key: string]: Stargate } = {};
         if (stargatesRes.length > 0) {
-            stargatesRes[0].values.forEach((row) => {
-                const typedRow = row as StargateRow;
-                stargates[typedRow[0]] = {
-                    id: typedRow[0],
-                    name: typedRow[1],
-                    source_system_id: typedRow[2],
-                    destination_system_id: typedRow[3]
+            stargatesRes[0].values.forEach((row: any[]) => {
+                const stargate: StargateRow = {
+                    id: row[0],
+                    name: row[1],
+                    source_system_id: row[2],
+                    destination_system_id: row[3]
+                };
+                stargates[stargate.id] = {
+                    id: stargate.id,
+                    name: stargate.name,
+                    source_system_id: stargate.source_system_id,
+                    destination_system_id: stargate.destination_system_id
                 };
             });
         }
         
         const regions: { [key: string]: any } = {};
         if (regionsRes.length > 0) {
-            regionsRes[0].values.forEach((row) => {
-                const typedRow = row as RegionRow;
-                regions[typedRow[0]] = {
-                    id: typedRow[0],
-                    name: typedRow[1],
+            regionsRes[0].values.forEach((row: any[]) => {
+                const region: RegionRow = {
+                    id: row[0],
+                    name: row[1]
+                };
+                regions[region.id] = {
+                    id: region.id,
+                    name: region.name,
                     // ... other region properties
                 };
             });
@@ -223,11 +210,14 @@ function App() {
 
         const constellations: { [key: string]: any } = {};
         if (constellationsRes.length > 0) {
-            constellationsRes[0].values.forEach((row) => {
-                const typedRow = row as ConstellationRow;
-                constellations[typedRow[0]] = {
-                    id: typedRow[0],
-                    name: typedRow[1],
+            constellationsRes[0].values.forEach((row: any[]) => {
+                const constellation: ConstellationRow = {
+                    id: row[0],
+                    name: row[1]
+                };
+                constellations[constellation.id] = {
+                    id: constellation.id,
+                    name: constellation.name,
                     // ... other constellation properties
                 };
             });

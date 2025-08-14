@@ -13,6 +13,7 @@
     "@types/three": "^0.179.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
+    "sql.js": "^1.10.2",
     "three": "^0.179.1"
   },
   "devDependencies": {
