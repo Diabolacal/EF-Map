@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import './App.css';
+import RegionHighlighterModule from './modules/RegionHighlighter';
+import initSqlJs from 'sql.js';
 
 // Helper function to create a circular texture
 const createCircleTexture = () => {
@@ -61,12 +63,44 @@ interface MapData {
   constellations: { [key: string]: any };
 }
 
+// Add these interfaces
+type SystemRow = [
+  number, // id
+  string, // name
+  number, // constellation_id
+  number, // region_id
+  any, any, any, // placeholder for unused columns
+  number, // position.x
+  number, // position.y
+  number, // position.z
+  any, any, any, // placeholder for unused columns
+  boolean // hidden
+];
+
+type StargateRow = [
+  number, // id
+  string, // name
+  number, // source_system_id
+  number // destination_system_id
+];
+
+type RegionRow = [
+  number, // id
+  string // name
+];
+
+type ConstellationRow = [
+  number, // id
+  string // name
+];
+
 function App() {
   const mountRef = useRef<HTMLDivElement>(null);
   const [mapData, setMapData] = useState<MapData | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [highlightedSystem, setHighlightedSystem] = useState<SolarSystem | null>(null);
   const [hoveredSystem, setHoveredSystem] = useState<SolarSystem | null>(null);
+  const [isRegionHighlighterActive, setIsRegionHighlighterActive] = useState(false);
 
   // Refs for three.js objects
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -75,6 +109,7 @@ function App() {
   const controlsRef = useRef<OrbitControls | null>(null);
   const starFieldRef = useRef<THREE.Points | null>(null);
   const hoverPointRef = useRef<THREE.Points | null>(null);
+  const stargateLinesRef = useRef<THREE.LineSegments | null>(null);
   const visibleSystemsRef = useRef<SolarSystem[]>([]);
   const animationRef = useRef({
     isAnimating: false,
@@ -99,12 +134,86 @@ function App() {
     vertexColors: true,
   }), [circleTexture]);
 
-  // Fetch data
+  const stargateMaterial = useMemo(() => new THREE.LineBasicMaterial({ color: 0x444444, transparent: true, opacity: 0.05 }), []);
+
+  // Fetch and process data from SQLite
   useEffect(() => {
-    fetch('/map_data.json')
-      .then((response) => response.json())
-      .then((data: MapData) => setMapData(data))
-      .catch((error) => console.error('Error loading map data:', error));
+    const loadDatabase = async () => {
+      try {
+        const SQL = await initSqlJs({
+          locateFile: (file: string) => `/${file}`
+        });
+        const response = await fetch('/map_data.db');
+        const dbBytes = await response.arrayBuffer();
+        const db = new SQL.Database(new Uint8Array(dbBytes));
+
+        // Query the database
+        const systemsRes = db.exec("SELECT * FROM systems WHERE hidden = 0");
+        const stargatesRes = db.exec("SELECT * FROM stargates");
+        const regionsRes = db.exec("SELECT * FROM regions");
+        const constellationsRes = db.exec("SELECT * FROM constellations");
+
+        const solar_systems: { [key: string]: SolarSystem } = {};
+        if (systemsRes.length > 0) {
+            systemsRes[0].values.forEach((row) => {
+                const typedRow = row as SystemRow;
+                solar_systems[typedRow[0]] = {
+                    id: typedRow[0],
+                    name: typedRow[1],
+                    position: { x: typedRow[7], y: typedRow[8], z: typedRow[9] },
+                    region_id: typedRow[3],
+                    constellation_id: typedRow[2],
+                    planets: 0, // This data is not in the DB
+                    hidden: typedRow[13]
+                };
+            });
+        }
+
+        const stargates: { [key: string]: Stargate } = {};
+        if (stargatesRes.length > 0) {
+            stargatesRes[0].values.forEach((row) => {
+                const typedRow = row as StargateRow;
+                stargates[typedRow[0]] = {
+                    id: typedRow[0],
+                    name: typedRow[1],
+                    source_system_id: typedRow[2],
+                    destination_system_id: typedRow[3]
+                };
+            });
+        }
+        
+        const regions: { [key: string]: any } = {};
+        if (regionsRes.length > 0) {
+            regionsRes[0].values.forEach((row) => {
+                const typedRow = row as RegionRow;
+                regions[typedRow[0]] = {
+                    id: typedRow[0],
+                    name: typedRow[1],
+                    // ... other region properties
+                };
+            });
+        }
+
+        const constellations: { [key: string]: any } = {};
+        if (constellationsRes.length > 0) {
+            constellationsRes[0].values.forEach((row) => {
+                const typedRow = row as ConstellationRow;
+                constellations[typedRow[0]] = {
+                    id: typedRow[0],
+                    name: typedRow[1],
+                    // ... other constellation properties
+                };
+            });
+        }
+
+        setMapData({ solar_systems, stargates, regions, constellations });
+
+      } catch (error) {
+        console.error('Error loading map data:', error);
+      }
+    };
+
+    loadDatabase();
   }, []);
 
   const getTransformedPosition = useCallback((position: { x: number; y: number; z: number }) => {
@@ -216,7 +325,12 @@ function App() {
     starFieldRef.current = new THREE.Points(pointsGeometry, pointsMaterial);
     sceneRef.current.add(starFieldRef.current);
 
-    const stargateMaterial = new THREE.LineBasicMaterial({ color: 0xcccccc, transparent: true, opacity: 0.1 });
+    if (stargateLinesRef.current) {
+      sceneRef.current.remove(stargateLinesRef.current);
+      stargateLinesRef.current.geometry.dispose();
+    }
+
+    const stargateVertices: number[] = [];
     if (mapData.stargates) {
       Object.values(mapData.stargates).forEach((stargate) => {
         const sourceSystem = mapData.solar_systems[stargate.source_system_id];
@@ -224,12 +338,15 @@ function App() {
         if (sourceSystem && destinationSystem && sourceSystem.position && destinationSystem.position && !sourceSystem.hidden && !destinationSystem.hidden) {
           const sourcePos = getTransformedPosition(sourceSystem.position);
           const destPos = getTransformedPosition(destinationSystem.position);
-          const points = [new THREE.Vector3(sourcePos.x, sourcePos.y, sourcePos.z), new THREE.Vector3(destPos.x, destPos.y, destPos.z)];
-          const geometry = new THREE.BufferGeometry().setFromPoints(points);
-          const line = new THREE.Line(geometry, stargateMaterial);
-          sceneRef.current?.add(line);
+          stargateVertices.push(sourcePos.x, sourcePos.y, sourcePos.z);
+          stargateVertices.push(destPos.x, destPos.y, destPos.z);
         }
       });
+      const stargateGeometry = new THREE.BufferGeometry();
+      stargateGeometry.setAttribute('position', new THREE.Float32BufferAttribute(stargateVertices, 3));
+      const stargateLines = new THREE.LineSegments(stargateGeometry, stargateMaterial);
+      sceneRef.current?.add(stargateLines);
+      stargateLinesRef.current = stargateLines;
     }
   }, [mapData, getTransformedPosition, pointsMaterial]);
 
@@ -345,7 +462,24 @@ function App() {
       currentRenderer.domElement.removeEventListener('pointermove', onPointerMove);
       currentRenderer.domElement.removeEventListener('pointerdown', onPointerDown);
     };
-  }, [hoveredSystem]);
+  }, [hoveredSystem, starFieldRef.current]);
+
+  // Handle Region Highlighter Module
+  useEffect(() => {
+    if (mapData && starFieldRef.current) {
+      if (isRegionHighlighterActive) {
+        RegionHighlighterModule.init(sceneRef.current!, mapData, starFieldRef.current);
+      } else {
+        RegionHighlighterModule.cleanup(starFieldRef.current);
+      }
+    }
+    // Cleanup on component unmount
+    return () => {
+      if (mapData && starFieldRef.current) {
+        RegionHighlighterModule.cleanup(starFieldRef.current);
+      }
+    };
+  }, [isRegionHighlighterActive, mapData]);
 
   const handleSearch = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'Enter' && mapData) {
@@ -364,15 +498,27 @@ function App() {
 
   return (
     <>
-      <div style={{ position: 'absolute', top: 10, left: 10, zIndex: 1 }}>
-        <input
-          type="text"
-          placeholder="Search for a system..."
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          onKeyDown={handleSearch}
-          style={{ padding: '5px' }}
-        />
+      <div style={{ position: 'absolute', top: 10, left: 10, zIndex: 1, color: 'white', backgroundColor: 'rgba(0,0,0,0.5)', padding: '10px', borderRadius: '5px' }}>
+        <div>
+          <input
+            type="text"
+            placeholder="Search for a system..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={handleSearch}
+            style={{ padding: '5px' }}
+          />
+        </div>
+        <div style={{ marginTop: '10px' }}>
+          <label>
+            <input
+              type="checkbox"
+              checked={isRegionHighlighterActive}
+              onChange={(e) => setIsRegionHighlighterActive(e.target.checked)}
+            />
+            Highlight 'Restrained Element'
+          </label>
+        </div>
       </div>
       <div ref={mountRef} style={{ width: '100vw', height: '100vh' }} />
     </>
