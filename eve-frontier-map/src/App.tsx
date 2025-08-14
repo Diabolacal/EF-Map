@@ -28,7 +28,7 @@ const createRingTexture = () => {
   if (context) {
     context.beginPath();
     context.arc(32, 32, 28, 0, 2 * Math.PI);
-    context.lineWidth = 4;
+    context.lineWidth = 8;
     context.strokeStyle = 'white';
     context.stroke();
   }
@@ -122,17 +122,44 @@ function App() {
   });
   const prevHighlightedSystemRef = useRef<SolarSystem | null>(null);
 
+  const isDraggingRef = useRef(false);
+  const mouseDownPosRef = useRef(new THREE.Vector2());
+  const mouseDownTimeRef = useRef(0);
+
   const circleTexture = useMemo(() => createCircleTexture(), []);
   const ringTexture = useMemo(() => createRingTexture(), []);
 
-  const pointsMaterial = useMemo(() => new THREE.PointsMaterial({
-    size: 2,
-    sizeAttenuation: true,
-    map: circleTexture,
-    transparent: true,
-    alphaTest: 0.5,
-    vertexColors: true,
-  }), [circleTexture]);
+  const pointsMaterial = useMemo(() => {
+    const material = new THREE.PointsMaterial({
+      size: 2,
+      sizeAttenuation: true,
+      map: circleTexture,
+      transparent: true,
+      alphaTest: 0.5,
+      vertexColors: true,
+    });
+
+    material.onBeforeCompile = (shader) => {
+      // Add a uniform for the maximum point size in pixels
+      shader.uniforms.maxPointSize = { value: 10.0 };
+
+      // Inject the uniform declaration into the shader
+      shader.vertexShader = `
+            uniform float maxPointSize;
+            ${shader.vertexShader}
+        `;
+
+      // Replace the line where gl_PointSize is set to cap it
+      shader.vertexShader = shader.vertexShader.replace(
+        '#include <logdepthbuf_vertex>',
+        `
+            gl_PointSize = min(gl_PointSize, maxPointSize); // Cap to max pixel size
+            #include <logdepthbuf_vertex>
+            `
+      );
+    };
+    return material;
+  }, [circleTexture]);
 
   const stargateMaterial = useMemo(() => new THREE.LineBasicMaterial({ color: 0x444444, transparent: true, opacity: 0.05 }), []);
 
@@ -406,15 +433,14 @@ function App() {
         const pos = getTransformedPosition(hoveredSystem.position);
         hoverPoint.position.set(pos.x, pos.y, pos.z);
 
-        // Adaptive sizing
-        const worldPos = new THREE.Vector3(pos.x, pos.y, pos.z);
-        const distance = camera.position.distanceTo(worldPos);
-        const scale = renderer.domElement.height / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2));
-        const projectedStarSize = (pointsMaterial.size * scale) / distance;
+        // Adaptive sizing for hover ring, based on capped star size
+        const MAX_STAR_PIXEL_SIZE = 10; // This is the capped size for stars
+        const HOVER_RING_PADDING = 5; // Pixels of padding around the star
+        const MIN_HOVER_RING_SIZE = 15; // Original minimum size for the ring
 
-        const minRingSize = 15;
-        const ringPadding = 10;
-        const newRingSize = Math.max(minRingSize, projectedStarSize + ringPadding);
+        // Calculate the new ring size, ensuring it's at least MIN_HOVER_RING_SIZE
+        // and based on the capped star size plus padding.
+        const newRingSize = Math.max(MIN_HOVER_RING_SIZE, MAX_STAR_PIXEL_SIZE + HOVER_RING_PADDING);
         
         (hoverPoint.material as THREE.PointsMaterial).size = newRingSize;
 
@@ -433,36 +459,65 @@ function App() {
     const raycaster = new THREE.Raycaster();
     const mouse = new THREE.Vector2();
 
+    const DRAG_THRESHOLD = 5; // pixels
+    const CLICK_TIME_THRESHOLD = 200; // milliseconds
+
     const onPointerMove = (event: PointerEvent) => {
       mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
       mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
-      if (cameraRef.current && starFieldRef.current) {
+
+      if (event.buttons & 1) { // Left mouse button is down
+        const currentMousePos = new THREE.Vector2(event.clientX, event.clientY);
+        if (currentMousePos.distanceTo(mouseDownPosRef.current) > DRAG_THRESHOLD) {
+          isDraggingRef.current = true;
+        }
+      }
+
+      if (cameraRef.current && starFieldRef.current && !isDraggingRef.current) {
         raycaster.setFromCamera(mouse, cameraRef.current);
-        raycaster.params.Points.threshold = 5;
+        raycaster.params.Points.threshold = 1;
         const intersects = raycaster.intersectObject(starFieldRef.current);
         if (intersects.length > 0 && intersects[0].index !== undefined) {
           setHoveredSystem(visibleSystemsRef.current[intersects[0].index]);
         } else {
           setHoveredSystem(null);
         }
+      } else if (isDraggingRef.current) {
+        setHoveredSystem(null); // Clear hover when dragging
       }
     };
 
     const onPointerDown = (event: PointerEvent) => {
-      if (event.button !== 0) return;
-      if (hoveredSystem) {
-        setHighlightedSystem(hoveredSystem);
+      if (event.button !== 0) return; // Only care about left mouse button
+      isDraggingRef.current = false;
+      mouseDownPosRef.current.set(event.clientX, event.clientY);
+      mouseDownTimeRef.current = Date.now();
+    };
+
+    const onPointerUp = (event: PointerEvent) => {
+      if (event.button !== 0) return; // Only care about left mouse button
+
+      const timeElapsed = Date.now() - mouseDownTimeRef.current;
+
+      if (!isDraggingRef.current && timeElapsed < CLICK_TIME_THRESHOLD) {
+        // It was a click, not a drag
+        if (hoveredSystem) {
+          setHighlightedSystem(hoveredSystem);
+        }
       }
+      isDraggingRef.current = false; // Reset drag state
     };
 
     currentRenderer.domElement.addEventListener('pointermove', onPointerMove);
     currentRenderer.domElement.addEventListener('pointerdown', onPointerDown);
+    currentRenderer.domElement.addEventListener('pointerup', onPointerUp);
 
     return () => {
       currentRenderer.domElement.removeEventListener('pointermove', onPointerMove);
       currentRenderer.domElement.removeEventListener('pointerdown', onPointerDown);
+      currentRenderer.domElement.removeEventListener('pointerup', onPointerUp);
     };
-  }, [hoveredSystem, starFieldRef.current]);
+  }, [hoveredSystem, starFieldRef.current, isDraggingRef, mouseDownPosRef, mouseDownTimeRef]);
 
   // Handle Region Highlighter Module
   useEffect(() => {
