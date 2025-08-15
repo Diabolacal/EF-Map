@@ -4,6 +4,10 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import './App.css';
 import RegionHighlighterModule from './modules/RegionHighlighter';
+<<<<<<< HEAD
+=======
+import VisitedSystemsModule from './modules/VisitedSystems';
+>>>>>>> master
 import { openDbFromArrayBuffer } from "./lib/sql";
 import type { SystemRow, StargateRow, RegionRow, ConstellationRow } from "./types/db";
 
@@ -75,6 +79,10 @@ function App() {
   const [highlightedSystem, setHighlightedSystem] = useState<SolarSystem | null>(null);
   const [hoveredSystem, setHoveredSystem] = useState<SolarSystem | null>(null);
   const [isRegionHighlighterActive, setIsRegionHighlighterActive] = useState(false);
+<<<<<<< HEAD
+=======
+  const [isVisitedSystemsActive, setIsVisitedSystemsActive] = useState(false);
+>>>>>>> master
 
   // New state for labels
   const hoverLabelObj = useRef<CSS2DObject | null>(null);
@@ -730,6 +738,26 @@ function App() {
     };
   }, [isRegionHighlighterActive, mapData]);
 
+<<<<<<< HEAD
+=======
+  // Handle Visited Systems Highlighter Module
+  useEffect(() => {
+    if (mapData && starFieldRef.current) {
+      if (isVisitedSystemsActive) {
+        VisitedSystemsModule.init(sceneRef.current!, mapData, starFieldRef.current);
+      } else {
+        VisitedSystemsModule.cleanup(starFieldRef.current);
+      }
+    }
+    // Cleanup on component unmount
+    return () => {
+      if (mapData && starFieldRef.current) {
+        VisitedSystemsModule.cleanup(starFieldRef.current);
+      }
+    };
+  }, [isVisitedSystemsActive, mapData]);
+
+>>>>>>> master
   const handleSearch = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'Enter' && mapData) {
       const query = searchQuery.toLowerCase();
@@ -768,6 +796,19 @@ function App() {
             Highlight 'Restrained Element'
           </label>
         </div>
+<<<<<<< HEAD
+=======
+        <div style={{ marginTop: '10px' }}>
+          <label>
+            <input
+              type="checkbox"
+              checked={isVisitedSystemsActive}
+              onChange={(e) => setIsVisitedSystemsActive(e.target.checked)}
+            />
+            Highlight Visited Systems
+          </label>
+        </div>
+>>>>>>> master
       </div>
       <div ref={mountRef} style={{ width: '100vw', height: '100vh' }} />
     </>
