@@ -119,6 +119,11 @@ function App() {
     return null;
   }, []);
 
+  // Type guard for userData with id
+  function hasId(obj: any): obj is { id: number } {
+    return obj && typeof obj === 'object' && 'id' in obj && typeof obj.id === 'number';
+  }
+
   // Helper to set label text
   const setLabelText = (obj: CSS2DObject, txt: string) => {
     const inner = (obj.element as HTMLElement).querySelector('.system-label') as HTMLElement | null;
@@ -646,13 +651,14 @@ function App() {
 
             // If a star is already selected and the primary intersected star is the same as the selected one,
             // try to find a different nearby star in the intersection list.
-            if (selectedStar.current && clickedSystem.id === selectedStar.current.userData.id) {
+            if (selectedStar.current && hasId(selectedStar.current.userData) && clickedSystem.id === selectedStar.current.userData.id) {
               for (let i = 1; i < intersects.length; i++) {
-                if (intersects[i].index !== undefined) { // Also check for undefined here
-                  const potentialClickedSystem = visibleSystemsRef.current[intersects[i].index];
-                  if (potentialClickedSystem.id !== selectedStar.current.userData.id) {
+                const idx = intersects[i].index;
+                if (typeof idx === 'number') {
+                  const potentialClickedSystem = visibleSystemsRef.current[idx];
+                  if (!selectedStar.current || !hasId(selectedStar.current.userData) || potentialClickedSystem.id !== selectedStar.current.userData.id) {
                     clickedSystem = potentialClickedSystem;
-                    break; // Found a different star, use it
+                    break;
                   }
                 }
               }
@@ -661,8 +667,7 @@ function App() {
             const positionAttribute = starFieldRef.current!.geometry.attributes.position;
             intersectedPointPosition.fromBufferAttribute(positionAttribute, intersectedIndex); // Use the variable
 
-            let newSelectedStarObject: THREE.Object3D;
-            if (selectedStar.current && selectedStar.current.userData.id === clickedSystem.id) {
+            if (selectedStar.current && hasId(selectedStar.current.userData) && selectedStar.current.userData.id === clickedSystem.id) {
               // Clicked the same star, do nothing or clear selection (per spec, do nothing)
               return;
             } else {
@@ -673,9 +678,9 @@ function App() {
                   sceneRef.current.remove(selectedLabelObj.current.parent);
                 }
               }
-              newSelectedStarObject = new THREE.Object3D();
+              const newSelectedStarObject = new THREE.Object3D();
               newSelectedStarObject.position.copy(intersectedPointPosition);
-              newSelectedStarObject.userData.id = clickedSystem.id; // Store ID for comparison
+              Object.assign(newSelectedStarObject.userData, { id: clickedSystem.id });
               sceneRef.current?.add(newSelectedStarObject);
               selectedStar.current = newSelectedStarObject;
 
