@@ -313,6 +313,7 @@ function App() {
     const controls = new OrbitControls(cameraRef.current, rendererRef.current.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.1;
+    controls.minDistance = 10; // Add this line
     controlsRef.current = controls;
     
     cameraRef.current.position.z = 5000;
@@ -526,7 +527,16 @@ function App() {
 
       if (cameraRef.current && starFieldRef.current && !isDraggingRef.current) {
         raycaster.setFromCamera(mouse, cameraRef.current);
-        raycaster.params.Points.threshold = 5;
+        // Dynamic threshold based on camera distance
+        const distance = cameraRef.current.position.distanceTo(controlsRef.current.target);
+        const minDistance = 100; // Adjust as needed
+        const maxDistance = 50000; // Adjust as needed
+        const minThreshold = 1; // Precise for zoomed in
+        const maxThreshold = 300; // Forgiving for zoomed out
+        const clampedDistance = Math.max(minDistance, Math.min(maxDistance, distance));
+        const normalizedDistance = (clampedDistance - minDistance) / (maxDistance - minDistance);
+        const dynamicThreshold = minThreshold + (maxThreshold - minThreshold) * normalizedDistance;
+        raycaster.params.Points.threshold = dynamicThreshold;
         const intersects = raycaster.intersectObject(starFieldRef.current);
 
         let newHoveredSystem: SolarSystem | null = null;
@@ -609,11 +619,32 @@ function App() {
           mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
           mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
           raycaster.setFromCamera(mouse, cameraRef.current!); // New: Render labels
-          raycaster.params.Points.threshold = 5;
+          // Dynamic threshold based on camera distance
+          const distance = cameraRef.current.position.distanceTo(controlsRef.current.target);
+          const minDistance = 100; // Adjust as needed
+          const maxDistance = 50000; // Adjust as needed
+          const minThreshold = 1; // Precise for zoomed in
+          const maxThreshold = 300; // Forgiving for zoomed out
+          const clampedDistance = Math.max(minDistance, Math.min(maxDistance, distance));
+          const normalizedDistance = (clampedDistance - minDistance) / (maxDistance - minDistance);
+          const dynamicThreshold = minThreshold + (maxThreshold - minThreshold) * normalizedDistance;
+          raycaster.params.Points.threshold = dynamicThreshold;
           const intersects = raycaster.intersectObject(starFieldRef.current!); // New: Render labels
 
           if (intersects.length > 0 && intersects[0].index !== undefined) {
-            const clickedSystem = visibleSystemsRef.current[intersects[0].index];
+            let clickedSystem = visibleSystemsRef.current[intersects[0].index];
+
+            // If a star is already selected and the primary intersected star is the same as the selected one,
+            // try to find a different nearby star in the intersection list.
+            if (selectedStar.current && clickedSystem.id === selectedStar.current.userData.id) {
+              for (let i = 1; i < intersects.length; i++) {
+                const potentialClickedSystem = visibleSystemsRef.current[intersects[i].index];
+                if (potentialClickedSystem.id !== selectedStar.current.userData.id) {
+                  clickedSystem = potentialClickedSystem;
+                  break; // Found a different star, use it
+                }
+              }
+            }
             const intersectedPointPosition = new THREE.Vector3();
             const positionAttribute = starFieldRef.current!.geometry.attributes.position;
             intersectedPointPosition.fromBufferAttribute(positionAttribute, intersects[0].index);
