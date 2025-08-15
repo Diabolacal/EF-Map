@@ -1,0 +1,8 @@
+{
+  "dependencies": {
+    "sql.js": "^1.13.0"
+  },
+  "devDependencies": {
+    "@types/sql.js": "^1.4.9"
+  }
+}
