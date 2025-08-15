@@ -1,8 +1,22 @@
 import * as THREE from 'three';
 
+interface SolarSystem {
+  id: number;
+  name: string;
+  position: {
+    x: number;
+    y: number;
+    z: number;
+  };
+  region_id: number;
+  constellation_id: number;
+  planets: number;
+  hidden?: boolean;
+}
+
 // Define a simplified interface for what the module needs.
 interface MapData {
-  solar_systems: { [key: string]: { region_id?: number } };
+  solar_systems: { [key: string]: SolarSystem };
 }
 
 interface Module {
@@ -29,7 +43,7 @@ const RegionHighlighterModule: Module = {
     originalColors = new Float32Array(colors.array);
 
     const systems = Object.values(mapData.solar_systems);
-    const visibleSystems = systems.filter(s => s && (s as any).position && !(s as any).hidden);
+    const visibleSystems = systems.filter(s => s && s.position && !s.hidden);
 
     visibleSystems.forEach((system, index) => {
       if (system.region_id === REGION_TO_HIGHLIGHT) {

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import './App.css';
 import RegionHighlighterModule from './modules/RegionHighlighter';
 import { openDbFromArrayBuffer } from "./lib/sql";
@@ -60,11 +61,11 @@ interface Stargate {
 interface MapData {
   solar_systems: { [key: string]: SolarSystem };
   stargates: { [key: string]: Stargate };
-  regions: { [key: string]: any };
-  constellations: { [key: string]: any };
+  regions: { [key: string]: RegionRow };
+  constellations: { [key: string]: ConstellationRow };
 }
 
-// Add these interfaces
+type SqlValue = number | string | Uint8Array | null;
 
 
 function App() {
@@ -74,6 +75,55 @@ function App() {
   const [highlightedSystem, setHighlightedSystem] = useState<SolarSystem | null>(null);
   const [hoveredSystem, setHoveredSystem] = useState<SolarSystem | null>(null);
   const [isRegionHighlighterActive, setIsRegionHighlighterActive] = useState(false);
+
+  // New state for labels
+  const hoverLabelObj = useRef<CSS2DObject | null>(null);
+  const selectedLabelObj = useRef<CSS2DObject | null>(null);
+  const selectedStar = useRef<THREE.Object3D | null>(null);
+
+  // Helper to create label elements
+  const createSystemLabelElement = useCallback((name: string, isPersistent = false): HTMLDivElement => {
+    const wrapper = document.createElement('div');          // This becomes CSS2DObject.element
+    wrapper.className = 'system-label-wrapper';
+    wrapper.style.pointerEvents = 'none';
+
+    const inner = document.createElement('div');            // Visible box
+    inner.className = isPersistent ? 'system-label system-label--selected' : 'system-label';
+    inner.textContent = name;
+
+    wrapper.appendChild(inner);
+
+    // Log computed styles for debugging
+    // This will only log once per label creation
+    setTimeout(() => {
+      const computedStyle = window.getComputedStyle(inner); // Log inner element's styles
+      console.log(`Label "${name}" computed styles:`, {
+        marginLeft: computedStyle.marginLeft, // Check marginLeft on inner
+        fontSize: computedStyle.fontSize,
+        background: computedStyle.backgroundColor,
+        border: computedStyle.border,
+        padding: computedStyle.padding,
+        width: inner.offsetWidth,
+        height: inner.offsetHeight,
+      });
+    }, 0); // Use setTimeout to ensure styles are computed
+    return wrapper;
+  }, []);
+
+  // Helper to get system name
+    // Helper to get system name
+  const getSystemName = useCallback((obj: THREE.Object3D): string | null => {
+    if (obj && obj.userData && obj.userData.name) {
+      return obj.userData.name;
+    }
+    return null;
+  }, []);
+
+  // Helper to set label text
+  const setLabelText = (obj: CSS2DObject, txt: string) => {
+    const inner = (obj.element as HTMLElement).querySelector('.system-label') as HTMLElement | null;
+    if (inner) inner.textContent = txt;
+  };
 
   // Refs for three.js objects
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -152,16 +202,16 @@ function App() {
 
         const solar_systems: { [key: string]: SolarSystem } = {};
         if (systemsRes.length > 0) {
-            systemsRes[0].values.forEach((row: any[]) => {
+            systemsRes[0].values.forEach((row: SqlValue[]) => {
                 const system: SystemRow = {
-                    id: row[0],
-                    name: row[1],
-                    constellation_id: row[2],
-                    region_id: row[3],
-                    x: row[7],
-                    y: row[8],
-                    z: row[9],
-                    hidden: row[13]
+                    id: row[0] as number,
+                    name: row[1] as string,
+                    constellation_id: row[2] as number,
+                    region_id: row[3] as number,
+                    x: row[7] as number,
+                    y: row[8] as number,
+                    z: row[9] as number,
+                    hidden: !!row[13]
                 };
                 solar_systems[system.id] = {
                     id: system.id,
@@ -177,12 +227,12 @@ function App() {
 
         const stargates: { [key: string]: Stargate } = {};
         if (stargatesRes.length > 0) {
-            stargatesRes[0].values.forEach((row: any[]) => {
+            stargatesRes[0].values.forEach((row: SqlValue[]) => {
                 const stargate: StargateRow = {
-                    id: row[0],
-                    name: row[1],
-                    source_system_id: row[2],
-                    destination_system_id: row[3]
+                    id: row[0] as number,
+                    name: row[1] as string,
+                    source_system_id: row[2] as number,
+                    destination_system_id: row[3] as number
                 };
                 stargates[stargate.id] = {
                     id: stargate.id,
@@ -193,12 +243,12 @@ function App() {
             });
         }
         
-        const regions: { [key: string]: any } = {};
+        const regions: { [key: string]: RegionRow } = {};
         if (regionsRes.length > 0) {
-            regionsRes[0].values.forEach((row: any[]) => {
+            regionsRes[0].values.forEach((row: SqlValue[]) => {
                 const region: RegionRow = {
-                    id: row[0],
-                    name: row[1]
+                    id: row[0] as number,
+                    name: row[1] as string
                 };
                 regions[region.id] = {
                     id: region.id,
@@ -208,12 +258,12 @@ function App() {
             });
         }
 
-        const constellations: { [key: string]: any } = {};
+        const constellations: { [key: string]: ConstellationRow } = {};
         if (constellationsRes.length > 0) {
-            constellationsRes[0].values.forEach((row: any[]) => {
+            constellationsRes[0].values.forEach((row: SqlValue[]) => {
                 const constellation: ConstellationRow = {
-                    id: row[0],
-                    name: row[1]
+                    id: row[0] as number,
+                    name: row[1] as string
                 };
                 constellations[constellation.id] = {
                     id: constellation.id,
@@ -251,6 +301,14 @@ function App() {
     rendererRef.current = new THREE.WebGLRenderer({ antialias: true });
     rendererRef.current.setSize(window.innerWidth, window.innerHeight);
     currentMount.appendChild(rendererRef.current.domElement);
+
+    // New: CSS2DRenderer setup
+    const labelRenderer = new CSS2DRenderer();
+    labelRenderer.setSize(window.innerWidth, window.innerHeight);
+    labelRenderer.domElement.style.position = 'absolute';
+    labelRenderer.domElement.style.top = '0px';
+    labelRenderer.domElement.style.pointerEvents = 'none'; // Crucial for not blocking mouse events
+    currentMount.appendChild(labelRenderer.domElement);
 
     const controls = new OrbitControls(cameraRef.current, rendererRef.current.domElement);
     controls.enableDamping = true;
@@ -294,6 +352,7 @@ function App() {
       }
       controls.update();
       rendererRef.current?.render(sceneRef.current!, cameraRef.current!);
+      labelRenderer.render(sceneRef.current!, cameraRef.current!); // Render CSS2DRenderer
     };
     animate();
 
@@ -302,6 +361,7 @@ function App() {
         cameraRef.current.aspect = window.innerWidth / window.innerHeight;
         cameraRef.current.updateProjectionMatrix();
         rendererRef.current.setSize(window.innerWidth, window.innerHeight);
+        labelRenderer.setSize(window.innerWidth, window.innerHeight); // New: Resize label renderer
       }
     };
     window.addEventListener('resize', handleResize);
@@ -311,6 +371,7 @@ function App() {
       controls.dispose();
       rendererRef.current?.dispose();
       currentMount.removeChild(rendererRef.current!.domElement);
+      currentMount.removeChild(labelRenderer.domElement); // New: Clean up label renderer DOM
     };
   }, [ringTexture]);
 
@@ -365,7 +426,7 @@ function App() {
       sceneRef.current?.add(stargateLines);
       stargateLinesRef.current = stargateLines;
     }
-  }, [mapData, getTransformedPosition, pointsMaterial]);
+  }, [mapData, getTransformedPosition, pointsMaterial, stargateMaterial]);
 
   // Handle highlighting
   useEffect(() => {
@@ -467,13 +528,63 @@ function App() {
         raycaster.setFromCamera(mouse, cameraRef.current);
         raycaster.params.Points.threshold = 1;
         const intersects = raycaster.intersectObject(starFieldRef.current);
+
+        let newHoveredSystem: SolarSystem | null = null;
+        let hitStarObject: THREE.Object3D | null = null;
+
         if (intersects.length > 0 && intersects[0].index !== undefined) {
-          setHoveredSystem(visibleSystemsRef.current[intersects[0].index]);
+          newHoveredSystem = visibleSystemsRef.current[intersects[0].index];
+          
+          const intersectedPointPosition = new THREE.Vector3();
+          const positionAttribute = starFieldRef.current.geometry.attributes.position;
+          intersectedPointPosition.fromBufferAttribute(positionAttribute, intersects[0].index);
+          hitStarObject = new THREE.Object3D(); // Create a dummy object to parent to
+          hitStarObject.position.copy(intersectedPointPosition);
+          sceneRef.current?.add(hitStarObject);
+
+          setHoveredSystem(newHoveredSystem);
+
+          if (hoverLabelObj.current === null) {
+            const el = createSystemLabelElement(newHoveredSystem.name);
+            hoverLabelObj.current = new CSS2DObject(el);
+            hoverLabelObj.current.position.set(0, 0, 0); // Position at star's center, offset via CSS transform
+            hitStarObject.add(hoverLabelObj.current);
+          } else {
+            if (hoverLabelObj.current.parent) {
+              hoverLabelObj.current.parent.remove(hoverLabelObj.current);
+              if (sceneRef.current && hoverLabelObj.current.parent instanceof THREE.Object3D) {
+                sceneRef.current.remove(hoverLabelObj.current.parent);
+              }
+            }
+            hitStarObject.add(hoverLabelObj.current);
+            setLabelText(hoverLabelObj.current, newHoveredSystem.name);
+            hoverLabelObj.current.position.set(0, 0, 0); // Reset offset
+          }
+          hoverLabelObj.current.visible = true;
+
         } else {
           setHoveredSystem(null);
+          if (hoverLabelObj.current) {
+            hoverLabelObj.current.visible = false;
+            if (hoverLabelObj.current.parent) {
+              hoverLabelObj.current.parent.remove(hoverLabelObj.current);
+              if (sceneRef.current && hoverLabelObj.current.parent instanceof THREE.Object3D) {
+                sceneRef.current.remove(hoverLabelObj.current.parent);
+              }
+            }
+          }
         }
       } else if (isDraggingRef.current) {
         setHoveredSystem(null); // Clear hover when dragging
+        if (hoverLabelObj.current) {
+          hoverLabelObj.current.visible = false;
+          if (hoverLabelObj.current.parent) {
+            hoverLabelObj.current.parent.remove(hoverLabelObj.current);
+            if (sceneRef.current && hoverLabelObj.current.parent instanceof THREE.Object3D) {
+              sceneRef.current.remove(hoverLabelObj.current.parent);
+            }
+          }
+        }
       }
     };
 
@@ -492,7 +603,52 @@ function App() {
       if (!isDraggingRef.current && timeElapsed < CLICK_TIME_THRESHOLD) {
         // It was a click, not a drag
         if (hoveredSystem) {
-          setHighlightedSystem(hoveredSystem);
+          setHighlightedSystem(hoveredSystem); // This is for camera animation, keep it.
+
+          // Handle persistent label
+          mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+          mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+          raycaster.setFromCamera(mouse, cameraRef.current!); // New: Render labels
+          raycaster.params.Points.threshold = 1;
+          const intersects = raycaster.intersectObject(starFieldRef.current!); // New: Render labels
+
+          if (intersects.length > 0 && intersects[0].index !== undefined) {
+            const clickedSystem = visibleSystemsRef.current[intersects[0].index];
+            const intersectedPointPosition = new THREE.Vector3();
+            const positionAttribute = starFieldRef.current!.geometry.attributes.position;
+            intersectedPointPosition.fromBufferAttribute(positionAttribute, intersects[0].index);
+
+            let newSelectedStarObject: THREE.Object3D;
+            if (selectedStar.current && selectedStar.current.userData.id === clickedSystem.id) {
+              // Clicked the same star, do nothing or clear selection (per spec, do nothing)
+              return;
+            } else {
+              // New selection
+              if (selectedLabelObj.current && selectedLabelObj.current.parent) {
+                selectedLabelObj.current.parent.remove(selectedLabelObj.current);
+                if (sceneRef.current && selectedLabelObj.current.parent instanceof THREE.Object3D) {
+                  sceneRef.current.remove(selectedLabelObj.current.parent);
+                }
+              }
+              newSelectedStarObject = new THREE.Object3D();
+              newSelectedStarObject.position.copy(intersectedPointPosition);
+              newSelectedStarObject.userData.id = clickedSystem.id; // Store ID for comparison
+              sceneRef.current?.add(newSelectedStarObject);
+              selectedStar.current = newSelectedStarObject;
+
+              if (selectedLabelObj.current === null) {
+                const el = createSystemLabelElement(clickedSystem.name, true);
+                selectedLabelObj.current = new CSS2DObject(el);
+                selectedLabelObj.current.position.set(0, 0, 0); // Position at star's center, offset via CSS transform
+                newSelectedStarObject.add(selectedLabelObj.current);
+              } else {
+                setLabelText(selectedLabelObj.current, clickedSystem.name);
+                selectedLabelObj.current.position.set(0, 0, 0); // Reset offset
+                newSelectedStarObject.add(selectedLabelObj.current); // Add to new parent
+              }
+              selectedLabelObj.current.visible = true;
+            }
+          }
         }
       }
       isDraggingRef.current = false; // Reset drag state
@@ -507,7 +663,7 @@ function App() {
       currentRenderer.domElement.removeEventListener('pointerdown', onPointerDown);
       currentRenderer.domElement.removeEventListener('pointerup', onPointerUp);
     };
-  }, [hoveredSystem, starFieldRef.current, isDraggingRef, mouseDownPosRef, mouseDownTimeRef]);
+    }, [hoveredSystem, isDraggingRef, mouseDownPosRef, mouseDownTimeRef, createSystemLabelElement, getSystemName]);
 
   // Handle Region Highlighter Module
   useEffect(() => {
@@ -571,3 +727,4 @@ function App() {
 }
 
 export default App;
+

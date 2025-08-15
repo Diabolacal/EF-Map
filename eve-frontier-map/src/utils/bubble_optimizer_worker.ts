@@ -2,8 +2,11 @@
 
 importScripts("https://cdn.jsdelivr.net/pyodide/v0.25.1/full/pyodide.js");
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 let pyodide: any = null;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 let calculateBaselineRoutePy: any = null;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 let runIterativePassPy: any = null;
 
 const METERS_PER_LY_FACTOR = 9_460_730_472_580_800;
@@ -12,7 +15,7 @@ async function initializePyodide() {
     if (pyodide) {
         return;
     }
-    pyodide = await (self as any).loadPyodide();
+    pyodide = await (self as any).loadPyodide(); // eslint-disable-line @typescript-eslint/no-explicit-any
 
     const response = await fetch('/optimizer_core.py');
     const pythonCode = await response.text();
@@ -40,7 +43,14 @@ self.onmessage = async (event: MessageEvent) => {
     const { id, action, payload } = event.data;
 
     if (action === 'runCalculation') {
-        const { path, systemsData, timePerPass, isBaseline, startSystemName } = payload;
+        interface RunCalculationPayload {
+            path: string[]; // Assuming path is an array of strings (system names)
+            systemsData: { [key: string]: { position: { x: number; y: number; z: number; } } };
+            timePerPass: number; // Assuming timePerPass is a number
+            isBaseline: boolean;
+            startSystemName: string;
+        }
+        const { path, systemsData, timePerPass, isBaseline, startSystemName } = payload as RunCalculationPayload;
 
         try {
             if (!pyodide || !calculateBaselineRoutePy || !runIterativePassPy) {
@@ -50,7 +60,7 @@ self.onmessage = async (event: MessageEvent) => {
             const transformedSystemsData: { [key: string]: { x: number; y: number; z: number } } = {};
             for (const systemName in systemsData) {
                 const system = systemsData[systemName];
-                transformedSystemsData[system.name] = reverseTransformCoordinates(system.position);
+                transformedSystemsData[systemName] = reverseTransformCoordinates(system.position);
             }
 
             let result;
@@ -68,8 +78,12 @@ self.onmessage = async (event: MessageEvent) => {
 
             self.postMessage({ type: 'result', id: id, result: resultJS });
 
-        } catch (error: any) {
-            self.postMessage({ type: 'error', id: id, error: error.message });
+        } catch (error: unknown) {
+            let errorMessage = "An unknown error occurred.";
+            if (error instanceof Error) {
+                errorMessage = error.message;
+            }
+            self.postMessage({ type: 'error', id: id, error: errorMessage });
         }
     }
 };

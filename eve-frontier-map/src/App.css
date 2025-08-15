@@ -7,3 +7,33 @@ body {
   width: 100vw;
   height: 100vh;
 }
+
+  --label-offset-px: 10px;  /* adjust here */
+
+.system-label-wrapper {
+  width: 0;
+  height: 0;
+  overflow: visible;       /* allow child to render outside the 0×0 anchor */
+  pointer-events: none;
+  user-select: none;
+}
+
+.system-label {
+  font-family: "Fira Mono","Roboto Mono","IBM Plex Mono","Cousine","Consolas",monospace;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1.15;
+  color: #BCBCB8;
+  font-size: 18px; /* 75% of 24px, as per request */
+  border: 1.5px solid var(--selection-orange, #FF7A00);
+  border-radius: 6px;
+  padding: 2px 6px;                             /* tight padding */
+  background: #000; /* Black interior fill */
+  text-shadow: 0 1px 0 #000, 0 0 6px rgba(255,255,255,.12);
+  white-space: nowrap;
+  user-select: none;
+  transform: translateX(65px);
+}
+.system-label--selected {
+  /* identical style; class exists only to allow future tweaks if needed */
+}
