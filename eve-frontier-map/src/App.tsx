@@ -526,7 +526,7 @@ function App() {
 
       if (cameraRef.current && starFieldRef.current && !isDraggingRef.current) {
         raycaster.setFromCamera(mouse, cameraRef.current);
-        raycaster.params.Points.threshold = 1;
+        raycaster.params.Points.threshold = 5;
         const intersects = raycaster.intersectObject(starFieldRef.current);
 
         let newHoveredSystem: SolarSystem | null = null;
@@ -609,7 +609,7 @@ function App() {
           mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
           mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
           raycaster.setFromCamera(mouse, cameraRef.current!); // New: Render labels
-          raycaster.params.Points.threshold = 1;
+          raycaster.params.Points.threshold = 5;
           const intersects = raycaster.intersectObject(starFieldRef.current!); // New: Render labels
 
           if (intersects.length > 0 && intersects[0].index !== undefined) {
