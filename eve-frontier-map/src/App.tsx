@@ -525,7 +525,11 @@ function App() {
         }
       }
 
-      if (cameraRef.current && starFieldRef.current && !isDraggingRef.current) {
+      if (!cameraRef.current || !starFieldRef.current || !controlsRef.current) {
+        return;
+      }
+
+      if (!isDraggingRef.current) {
         raycaster.setFromCamera(mouse, cameraRef.current);
         // Dynamic threshold based on camera distance
         const distance = cameraRef.current.position.distanceTo(controlsRef.current.target);
@@ -618,7 +622,12 @@ function App() {
           // Handle persistent label
           mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
           mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
-          raycaster.setFromCamera(mouse, cameraRef.current!); // New: Render labels
+
+          if (!cameraRef.current || !starFieldRef.current || !controlsRef.current) {
+            return;
+          }
+
+          raycaster.setFromCamera(mouse, cameraRef.current); // New: Render labels
           // Dynamic threshold based on camera distance
           const distance = cameraRef.current.position.distanceTo(controlsRef.current.target);
           const minDistance = 100; // Adjust as needed
@@ -632,22 +641,25 @@ function App() {
           const intersects = raycaster.intersectObject(starFieldRef.current!); // New: Render labels
 
           if (intersects.length > 0 && intersects[0].index !== undefined) {
-            let clickedSystem = visibleSystemsRef.current[intersects[0].index];
+            const intersectedIndex = intersects[0].index; // Assign to a variable
+            let clickedSystem = visibleSystemsRef.current[intersectedIndex];
 
             // If a star is already selected and the primary intersected star is the same as the selected one,
             // try to find a different nearby star in the intersection list.
             if (selectedStar.current && clickedSystem.id === selectedStar.current.userData.id) {
               for (let i = 1; i < intersects.length; i++) {
-                const potentialClickedSystem = visibleSystemsRef.current[intersects[i].index];
-                if (potentialClickedSystem.id !== selectedStar.current.userData.id) {
-                  clickedSystem = potentialClickedSystem;
-                  break; // Found a different star, use it
+                if (intersects[i].index !== undefined) { // Also check for undefined here
+                  const potentialClickedSystem = visibleSystemsRef.current[intersects[i].index];
+                  if (potentialClickedSystem.id !== selectedStar.current.userData.id) {
+                    clickedSystem = potentialClickedSystem;
+                    break; // Found a different star, use it
+                  }
                 }
               }
             }
             const intersectedPointPosition = new THREE.Vector3();
             const positionAttribute = starFieldRef.current!.geometry.attributes.position;
-            intersectedPointPosition.fromBufferAttribute(positionAttribute, intersects[0].index);
+            intersectedPointPosition.fromBufferAttribute(positionAttribute, intersectedIndex); // Use the variable
 
             let newSelectedStarObject: THREE.Object3D;
             if (selectedStar.current && selectedStar.current.userData.id === clickedSystem.id) {
