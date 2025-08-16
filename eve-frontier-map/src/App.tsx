@@ -93,20 +93,6 @@ function App() {
 
     wrapper.appendChild(inner);
 
-    // Log computed styles for debugging
-    // This will only log once per label creation
-    setTimeout(() => {
-      const computedStyle = window.getComputedStyle(inner); // Log inner element's styles
-      console.log(`Label "${name}" computed styles:`, {
-        marginLeft: computedStyle.marginLeft, // Check marginLeft on inner
-        fontSize: computedStyle.fontSize,
-        background: computedStyle.backgroundColor,
-        border: computedStyle.border,
-        padding: computedStyle.padding,
-        width: inner.offsetWidth,
-        height: inner.offsetHeight,
-      });
-    }, 0); // Use setTimeout to ensure styles are computed
     return wrapper;
   }, []);
 
@@ -189,7 +175,7 @@ function App() {
     return material;
   }, [circleTexture]);
 
-  const stargateMaterial = useMemo(() => new THREE.LineBasicMaterial({ color: 0x444444, transparent: true, opacity: 0.05 }), []);
+  const stargateMaterial = useMemo(() => new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.05 }), []);
 
   // Fetch and process data from SQLite
   useEffect(() => {
@@ -415,6 +401,10 @@ function App() {
     }
 
     const stargateVertices: number[] = [];
+    const stargateColors: number[] = [];
+    const defaultStargateColor = new THREE.Color(0x444444);
+    const stargateData: { source_system_id: number, destination_system_id: number }[] = [];
+
     if (mapData.stargates) {
       Object.values(mapData.stargates).forEach((stargate) => {
         const sourceSystem = mapData.solar_systems[stargate.source_system_id];
@@ -424,10 +414,18 @@ function App() {
           const destPos = getTransformedPosition(destinationSystem.position);
           stargateVertices.push(sourcePos.x, sourcePos.y, sourcePos.z);
           stargateVertices.push(destPos.x, destPos.y, destPos.z);
+
+          stargateColors.push(defaultStargateColor.r, defaultStargateColor.g, defaultStargateColor.b);
+          stargateColors.push(defaultStargateColor.r, defaultStargateColor.g, defaultStargateColor.b);
+
+          stargateData.push({ source_system_id: stargate.source_system_id, destination_system_id: stargate.destination_system_id });
         }
       });
       const stargateGeometry = new THREE.BufferGeometry();
       stargateGeometry.setAttribute('position', new THREE.Float32BufferAttribute(stargateVertices, 3));
+      stargateGeometry.setAttribute('color', new THREE.Float32BufferAttribute(stargateColors, 3));
+      stargateGeometry.userData = { stargateData };
+
       const stargateLines = new THREE.LineSegments(stargateGeometry, stargateMaterial);
       sceneRef.current?.add(stargateLines);
       stargateLinesRef.current = stargateLines;
@@ -507,6 +505,48 @@ function App() {
       }
     }
   }, [hoveredSystem, getTransformedPosition, pointsMaterial]);
+
+  const selectSystem = useCallback((system: SolarSystem) => {
+    // Find the system's index in the visibleSystemsRef
+    const systemIndex = visibleSystemsRef.current.findIndex(s => s.id === system.id);
+    if (systemIndex === -1) return;
+
+    // Get the position of the system
+    const positionAttribute = starFieldRef.current!.geometry.attributes.position;
+    const systemPosition = new THREE.Vector3();
+    systemPosition.fromBufferAttribute(positionAttribute, systemIndex);
+
+    // Clear previous selection
+    if (selectedLabelObj.current && selectedLabelObj.current.parent) {
+      selectedLabelObj.current.parent.remove(selectedLabelObj.current);
+      if (sceneRef.current && selectedLabelObj.current.parent instanceof THREE.Object3D) {
+        sceneRef.current.remove(selectedLabelObj.current.parent);
+      }
+    }
+
+    // Create a new selected star object
+    const newSelectedStarObject = new THREE.Object3D();
+    newSelectedStarObject.position.copy(systemPosition);
+    Object.assign(newSelectedStarObject.userData, { id: system.id });
+    sceneRef.current?.add(newSelectedStarObject);
+    selectedStar.current = newSelectedStarObject;
+
+    // Create or update the label
+    if (selectedLabelObj.current === null) {
+      const el = createSystemLabelElement(system.name, true);
+      selectedLabelObj.current = new CSS2DObject(el);
+      selectedLabelObj.current.position.set(0, 0, 0);
+      newSelectedStarObject.add(selectedLabelObj.current);
+    } else {
+      setLabelText(selectedLabelObj.current, system.name);
+      selectedLabelObj.current.position.set(0, 0, 0);
+      newSelectedStarObject.add(selectedLabelObj.current);
+    }
+    selectedLabelObj.current.visible = true;
+
+    // Set the highlighted system for camera animation
+    setHighlightedSystem(system);
+  }, [createSystemLabelElement, setLabelText]);
 
   // Handle Pointer Events
   useEffect(() => {
@@ -622,81 +662,7 @@ function App() {
       if (!isDraggingRef.current && timeElapsed < CLICK_TIME_THRESHOLD) {
         // It was a click, not a drag
         if (hoveredSystem) {
-          setHighlightedSystem(hoveredSystem); // This is for camera animation, keep it.
-
-          // Handle persistent label
-          mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
-          mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
-
-          if (!cameraRef.current || !starFieldRef.current || !controlsRef.current) {
-            return;
-          }
-
-          raycaster.setFromCamera(mouse, cameraRef.current); // New: Render labels
-          // Dynamic threshold based on camera distance
-          const distance = cameraRef.current.position.distanceTo(controlsRef.current.target);
-          const minDistance = 100; // Adjust as needed
-          const maxDistance = 50000; // Adjust as needed
-          const minThreshold = 1; // Precise for zoomed in
-          const maxThreshold = 300; // Forgiving for zoomed out
-          const clampedDistance = Math.max(minDistance, Math.min(maxDistance, distance));
-          const normalizedDistance = (clampedDistance - minDistance) / (maxDistance - minDistance);
-          const dynamicThreshold = minThreshold + (maxThreshold - minThreshold) * normalizedDistance;
-          raycaster.params.Points.threshold = dynamicThreshold;
-          const intersects = raycaster.intersectObject(starFieldRef.current!); // New: Render labels
-
-          if (intersects.length > 0 && intersects[0].index !== undefined) {
-            const intersectedIndex = intersects[0].index; // Assign to a variable
-            let clickedSystem = visibleSystemsRef.current[intersectedIndex];
-
-            // If a star is already selected and the primary intersected star is the same as the selected one,
-            // try to find a different nearby star in the intersection list.
-            if (selectedStar.current && hasId(selectedStar.current.userData) && clickedSystem.id === selectedStar.current.userData.id) {
-              for (let i = 1; i < intersects.length; i++) {
-                const idx = intersects[i].index;
-                if (typeof idx === 'number') {
-                  const potentialClickedSystem = visibleSystemsRef.current[idx];
-                  if (!selectedStar.current || !hasId(selectedStar.current.userData) || potentialClickedSystem.id !== selectedStar.current.userData.id) {
-                    clickedSystem = potentialClickedSystem;
-                    break;
-                  }
-                }
-              }
-            }
-            const intersectedPointPosition = new THREE.Vector3();
-            const positionAttribute = starFieldRef.current!.geometry.attributes.position;
-            intersectedPointPosition.fromBufferAttribute(positionAttribute, intersectedIndex); // Use the variable
-
-            if (selectedStar.current && hasId(selectedStar.current.userData) && selectedStar.current.userData.id === clickedSystem.id) {
-              // Clicked the same star, do nothing or clear selection (per spec, do nothing)
-              return;
-            } else {
-              // New selection
-              if (selectedLabelObj.current && selectedLabelObj.current.parent) {
-                selectedLabelObj.current.parent.remove(selectedLabelObj.current);
-                if (sceneRef.current && selectedLabelObj.current.parent instanceof THREE.Object3D) {
-                  sceneRef.current.remove(selectedLabelObj.current.parent);
-                }
-              }
-              const newSelectedStarObject = new THREE.Object3D();
-              newSelectedStarObject.position.copy(intersectedPointPosition);
-              Object.assign(newSelectedStarObject.userData, { id: clickedSystem.id });
-              sceneRef.current?.add(newSelectedStarObject);
-              selectedStar.current = newSelectedStarObject;
-
-              if (selectedLabelObj.current === null) {
-                const el = createSystemLabelElement(clickedSystem.name, true);
-                selectedLabelObj.current = new CSS2DObject(el);
-                selectedLabelObj.current.position.set(0, 0, 0); // Position at star's center, offset via CSS transform
-                newSelectedStarObject.add(selectedLabelObj.current);
-              } else {
-                setLabelText(selectedLabelObj.current, clickedSystem.name);
-                selectedLabelObj.current.position.set(0, 0, 0); // Reset offset
-                newSelectedStarObject.add(selectedLabelObj.current); // Add to new parent
-              }
-              selectedLabelObj.current.visible = true;
-            }
-          }
+          selectSystem(hoveredSystem);
         }
       }
       isDraggingRef.current = false; // Reset drag state
@@ -711,24 +677,42 @@ function App() {
       currentRenderer.domElement.removeEventListener('pointerdown', onPointerDown);
       currentRenderer.domElement.removeEventListener('pointerup', onPointerUp);
     };
-    }, [hoveredSystem, isDraggingRef, mouseDownPosRef, mouseDownTimeRef, createSystemLabelElement, getSystemName]);
+    }, [hoveredSystem, isDraggingRef, mouseDownPosRef, mouseDownTimeRef, createSystemLabelElement, getSystemName, selectSystem]);
 
   // Handle Region Highlighter Module
   useEffect(() => {
-    if (mapData && starFieldRef.current) {
-      if (isRegionHighlighterActive) {
-        RegionHighlighterModule.init(sceneRef.current!, mapData, starFieldRef.current);
-      } else {
-        RegionHighlighterModule.cleanup(starFieldRef.current);
-      }
+    if (!mapData || !starFieldRef.current) return;
+
+    if (isRegionHighlighterActive && highlightedSystem) { // Only init if active AND a system is highlighted
+      RegionHighlighterModule.init(
+        sceneRef.current!,
+        mapData,
+        starFieldRef.current,
+        stargateLinesRef.current,
+        highlightedSystem,
+        visibleSystemsRef.current
+      );
+    } else { // Cleanup if not active or no system is highlighted
+      RegionHighlighterModule.cleanup(
+        starFieldRef.current,
+        stargateLinesRef.current,
+        highlightedSystem,
+        visibleSystemsRef.current
+      );
     }
-    // Cleanup on component unmount
+
+    // Cleanup on component unmount or when isRegionHighlighterActive becomes false
     return () => {
       if (mapData && starFieldRef.current) {
-        RegionHighlighterModule.cleanup(starFieldRef.current);
+        RegionHighlighterModule.cleanup(
+          starFieldRef.current,
+          stargateLinesRef.current,
+          highlightedSystem,
+          visibleSystemsRef.current
+        );
       }
     };
-  }, [isRegionHighlighterActive, mapData]);
+  }, [isRegionHighlighterActive, mapData, highlightedSystem]); // Add highlightedSystem to dependencies
 
   const handleSearch = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'Enter' && mapData) {
@@ -737,7 +721,7 @@ function App() {
         (system) => system.name.toLowerCase() === query
       );
       if (foundSystem) {
-        setHighlightedSystem(foundSystem);
+        selectSystem(foundSystem);
       } else {
         setHighlightedSystem(null);
         alert('System not found');
@@ -763,9 +747,11 @@ function App() {
             <input
               type="checkbox"
               checked={isRegionHighlighterActive}
-              onChange={(e) => setIsRegionHighlighterActive(e.target.checked)}
+              onChange={(e) => {
+                setIsRegionHighlighterActive(e.target.checked);
+              }}
             />
-            Highlight 'Restrained Element'
+            Highlight Region
           </label>
         </div>
       </div>
