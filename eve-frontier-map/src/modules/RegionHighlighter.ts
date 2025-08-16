@@ -72,7 +72,7 @@ const RegionHighlighterModule: Module = {
 
     let stargateColors: THREE.BufferAttribute | null = null;
     if (stargateLines) {
-      const stargateGeometry = stargateLines.geometry as THREE.BufferGometry;
+      const stargateGeometry = stargateLines.geometry as THREE.BufferGeometry;
       stargateColors = stargateGeometry.attributes.color as THREE.BufferAttribute;
       if (stargateColors && stargateColors.array) {
         originalStargateColors = new Float32Array(stargateColors.array);

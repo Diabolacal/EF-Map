@@ -105,10 +105,7 @@ function App() {
     return null;
   }, []);
 
-  // Type guard for userData with id
-  function hasId(obj: any): obj is { id: number } {
-    return obj && typeof obj === 'object' && 'id' in obj && typeof obj.id === 'number';
-  }
+  
 
   // Helper to set label text
   const setLabelText = (obj: CSS2DObject, txt: string) => {
